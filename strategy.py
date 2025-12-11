@@ -1,6 +1,7 @@
 # strategy.py - GABAGOOL SIMPLE: Solo compra si baja Pair Cost
 from typing import Tuple
 
+
 class GabagoolStrategy:
     def __init__(
         self,
@@ -22,13 +23,18 @@ class GabagoolStrategy:
         self.qty_no = 0.0
         self.cost_no = 0.0
 
-        self.locked = False
+        self.locked = False  # True cuando ya hay beneficio garantizado
         self.trades = []
 
+    # ------------------------------------------------------------------ #
+    # Helpers de estado
+    # ------------------------------------------------------------------ #
     def reset(self):
         self.capital = self.initial_capital
-        self.qty_yes = self.qty_no = 0.0
-        self.cost_yes = self.cost_no = 0.0
+        self.qty_yes = 0.0
+        self.qty_no = 0.0
+        self.cost_yes = 0.0
+        self.cost_no = 0.0
         self.locked = False
         self.trades = []
 

@@ -1,6 +1,6 @@
 # backtest.py - Backtest con capital compuesto y profit real
 import pandas as pd
-import os
+
 from strategy import GabagoolStrategy
 import json
 
@@ -8,11 +8,11 @@ DATA_DIR = "live_data_polling"
 LOG_DIR = "trade_logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
-def load_all_markets():
-    markets = []
+def load_all_markets() -> List[dict]:
+    markets: List[dict] = []
     files = [f for f in os.listdir(DATA_DIR) if f.endswith(".csv")]
     print(f"Encontrados {len(files)} archivos en {DATA_DIR}\n")
-    
+
     for file in sorted(files):
         path = os.path.join(DATA_DIR, file)
         try:
@@ -20,12 +20,13 @@ def load_all_markets():
             if len(df) < 50:
                 print(f"Saltando {file} (muy pocos datos: {len(df)} filas)")
                 continue
+
             df = df.sort_values("timestamp").reset_index(drop=True)
             markets.append({"name": file, "data": df})
             print(f"Cargado {file}: {len(df)} ticks")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"Error leyendo {file}: {e}")
-    
+
     print(f"\nTotal mercados válidos: {len(markets)}\n")
     return markets
 
@@ -47,6 +48,7 @@ def run_backtest(
 
         print(f"Procesando → {name} ({len(df)} ticks) - Capital actual: ${current_capital:.2f}")
 
+        # Recorremos todos los ticks
         for _, row in df.iterrows():
             p_yes = float(row["price_yes"])
             p_no = float(row["price_no"])
