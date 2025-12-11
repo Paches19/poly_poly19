@@ -6,18 +6,20 @@ class GabagoolStrategy:
     def __init__(
         self,
         initial_capital: float = 1000.0,
-        target_pair_cost: float = 0.95,
-        max_order_pct: float = 0.25,  # % del capital disponible por compra
+        target_pair_cost: float = 0.97,
+        max_order_pct: float = 0.20,  # % del capital disponible por compra
         min_order_value: float = 10.0,
-        entry_threshold: float = 0.45,
+        entry_threshold: float = 0.40,
     ):
-        self.initial_capital = initial_capital
-        self.capital = initial_capital
-        self.target = target_pair_cost
-        self.max_order_pct = max_order_pct
-        self.min_order_value = min_order_value
-        self.entry_threshold = entry_threshold
+        # Parámetros de la estrategia
+        self.initial_capital = float(initial_capital)
+        self.capital = float(initial_capital)
+        self.target = float(target_pair_cost)
+        self.max_order_pct = float(max_order_pct)
+        self.min_order_value = float(min_order_value)
+        self.entry_threshold = float(entry_threshold)
 
+        # Estado acumulado
         self.qty_yes = 0.0
         self.cost_yes = 0.0
         self.qty_no = 0.0
@@ -45,76 +47,163 @@ class GabagoolStrategy:
         return self.cost_no / self.qty_no if self.qty_no > 0 else 0.0
 
     def pair_cost(self) -> float:
+        """avg_YES + avg_NO."""
         return self.avg_yes() + self.avg_no()
 
     def guaranteed_profit(self) -> float:
+        """min(Qty_YES, Qty_NO) - (Cost_YES + Cost_NO)."""
         return min(self.qty_yes, self.qty_no) - (self.cost_yes + self.cost_no)
 
-    def decide_and_execute(self, price_yes: float, price_no: float, ts) -> Tuple[str, float, float]:
+    # ------------------------------------------------------------------ #
+    # Núcleo de la estrategia
+    # ------------------------------------------------------------------ #
+    def _simulate_new_pair(
+        self, side: str, qty: float, price: float
+    ) -> float:
+        """Devuelve el nuevo pair cost si compramos qty en side a price."""
+        if qty <= 0:
+            return self.pair_cost()
+
+        if side == "YES":
+            new_cost_yes = self.cost_yes + qty * price
+            new_qty_yes = self.qty_yes + qty
+            avg_yes = new_cost_yes / new_qty_yes
+            avg_no = self.avg_no()
+        else:  # NO
+            new_cost_no = self.cost_no + qty * price
+            new_qty_no = self.qty_no + qty
+            avg_no = new_cost_no / new_qty_no
+            avg_yes = self.avg_yes()
+
+        return avg_yes + avg_no
+
+    def decide_and_execute(
+        self,
+        price_yes: float,
+        price_no: float,
+        ts,
+        debug_tick=None,  # se acepta pero no se usa, para compatibilidad
+    ) -> Tuple[str, float, float]:
+        """
+        Lógica principal:
+        - No hace nada si ya hay beneficio garantizado (locked).
+        - Solo compra si el nuevo pair_cost baja respecto al actual
+          Y además queda por debajo de target_pair_cost.
+        - Mantiene tamaños razonables con max_order_pct y min_order_value.
+
+        Devuelve (acción, cantidad, precio_ejecutado).
+        """
+
+        # Si ya está bloqueado el beneficio, no seguimos operando este mercado
+        if self.locked:
+            action = "LOCKED"
+            qty = 0.0
+            price = 0.0
+            return action, qty, price
 
         current_pair = self.pair_cost()
 
-        action = "HOLD"
-        qty = 0.0
+        # Actualizar flag locked si ya se cumple la fórmula del artículo
+        if self.guaranteed_profit() > 0:
+            self.locked = True
+
+        # Control de cash disponible para este tick
+        max_cash_this_trade = self.capital * self.max_order_pct
+
+        best_action = "HOLD"
+        best_qty = 0.0
+        best_price = 0.0
         best_new_pair = current_pair
 
-        # Probar ambos lados
-        for side, price in [("YES", price_yes), ("NO", price_no)]:
-            if price <= 0 or self.capital < self.min_order_value:
+        # Intentar ambos lados y quedarnos con el que deje mejor pair_cost
+        for side, price in [("YES", float(price_yes)), ("NO", float(price_no))]:
+            if price <= 0:
+                continue
+            if self.capital < self.min_order_value:
                 continue
 
-            if self.qty_yes == self.qty_no:
-                qty_c = min(self.capital * self.max_order_pct / price, self.capital / price)
-                if qty_c * price < self.min_order_value:
+            # Primera entrada: sólo si el precio está por debajo del umbral
+            if self.qty_yes == 0 and self.qty_no == 0:
+                if price > self.entry_threshold or price < 0.25:
                     continue
-            else:
-                if self.qty_yes > self.qty_no:
-                    qty_c = self.qty_yes - self.qty_no
-                else:
-                    qty_c = self.qty_no - self.qty_yes
 
-            # Simular new_pair
+            # Tamaño por capital disponible
+            qty_by_cash = max_cash_this_trade / price if price > 0 else 0.0
+
+            # Además, intentar balancear cantidades (hedge)
             if side == "YES":
-                new_cost = self.cost_yes + qty_c * price
-                new_qty = self.qty_yes + qty_c
-                new_pair_c = (new_cost / new_qty) + self.avg_no()
+                imbalance = max(self.qty_no - self.qty_yes, 0.0)
             else:
-                new_cost = self.cost_no + qty_c * price
-                new_qty = self.qty_no + qty_c
-                new_pair_c = self.avg_yes() + (new_cost / new_qty)
+                imbalance = max(self.qty_yes - self.qty_no, 0.0)
 
-            if self.qty_yes + self.qty_no == 0:
-                if price < self.entry_threshold:
-                    action = side
-                    qty = qty_c
-                    best_new_pair = new_pair_c
-            elif (self.qty_yes or self.qty_no == 0) and new_pair_c < 0.99:
-                action = side
-                qty = qty_c
-                best_new_pair = new_pair_c
-            elif new_pair_c < current_pair:
-                action = side
-                qty = qty_c
-                best_new_pair = new_pair_c
+            # Si hay desequilibrio, al menos queremos cubrir parte
+            base_qty = max(qty_by_cash, imbalance)
 
-        price = price_yes if action == "YES" else price_no
-        cost = qty * price
-        self.capital -= cost
+            # Comprobar valor mínimo de orden
+            if base_qty * price < self.min_order_value:
+                continue
 
-        if action == "YES":
-            self.qty_yes += qty
-            self.cost_yes += cost
-        elif action == "NO":
-            self.qty_no += qty
-            self.cost_no += cost
+            new_pair = self._simulate_new_pair(side, base_qty, price)
 
-        self.trades.append({
-            "ts": str(ts),
-            "action": action,
-            "price": round(price, 5),
-            "qty": round(qty, 2),
-            "pair_cost_after": round(best_new_pair, 4),
-            "balance_ratio": round(min(self.qty_yes, self.qty_no) / (self.qty_yes + self.qty_no + 1e-9), 3),
-            "guaranteed_profit_after": round(self.guaranteed_profit(), 2),
-            "capital_left": round(self.capital, 2),
-        })
+            # Reglas de entrada:
+            # 1) Siempre queremos que el pair new < pair actual (baja el coste medio)
+            # 2) Y además que el nuevo pair esté por debajo del target de seguridad
+            enter = None
+            if self.qty_yes == 0 and self.qty_no == 0:
+                # Cuando aún no estamos completamente hedgeados,
+                # permitimos comprar mientras el pair < target.
+                enter = new_pair < self.target
+            elif (self.qty_yes == 0 or self.qty_no == 0):
+                if side == "YES" and self.qty_yes == 0:
+                    enter = new_pair < 0.99
+                elif side == "NO" and self.qty_no == 0:
+                    enter = new_pair < 0.99
+            else:
+                enter = new_pair < current_pair
+
+            if not enter:
+                continue
+
+            # Escogemos la mejor mejora de pair_cost
+            if best_action == "HOLD" or new_pair < best_new_pair:
+                best_action = side
+                best_qty = base_qty
+                best_price = price
+                best_new_pair = new_pair
+
+        # Ejecutar, si toca
+        if best_action != "HOLD" and best_action in ("YES", "NO") and best_qty > 0:
+            total_cost = best_qty * best_price
+            self.capital -= total_cost
+
+            if best_action == "YES":
+                self.qty_yes += best_qty
+                self.cost_yes += total_cost
+            else:
+                self.qty_no += best_qty
+                self.cost_no += total_cost
+
+            balance_ratio = (
+                min(self.qty_yes, self.qty_no) / (self.qty_yes + self.qty_no + 1e-9)
+                if (self.qty_yes + self.qty_no) > 0
+                else 0.0
+            )
+
+            self.trades.append(
+                {
+                    "ts": str(ts),
+                    "action": best_action,
+                    "price": round(best_price, 5),
+                    "qty": round(best_qty, 2),
+                    "pair_cost_after": round(best_new_pair, 4),
+                    "balance_ratio": round(balance_ratio, 3),
+                    "guaranteed_profit_after": round(self.guaranteed_profit(), 2),
+                    "capital_left": round(self.capital, 2),
+                }
+            )
+
+        # Recalcular locked tras la operación
+        if self.guaranteed_profit() > 0:
+            self.locked = True
+
+        return best_action, best_qty, best_price
