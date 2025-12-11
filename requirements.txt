@@ -1,0 +1,6 @@
+pandas
+numpy
+python-dateutil
+requests
+py-clob-client
+websocket-client
