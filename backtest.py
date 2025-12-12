@@ -45,8 +45,8 @@ def run_backtest(initial_capital: float = 1000.0) -> Tuple[pd.DataFrame, float]:
     current_capital = float(initial_capital)
     total_profit = 0.0
     results = []
-
     markets = load_all_markets()
+    safe = 0
 
     for i, market in enumerate(markets, start=1):
         df = market["data"]
@@ -64,20 +64,25 @@ def run_backtest(initial_capital: float = 1000.0) -> Tuple[pd.DataFrame, float]:
             f"Capital actual: ${capital_before:.2f}"
         )
 
-        # Recorremos todos los ticks
-        for _, row in df.iterrows():
+        total_ticks = len(df)  # Total de ticks en este mercado
+        tendency = 0
+        for tick_index, (_, row) in enumerate(df.iterrows(), start=1):  # tick_index empieza en 1
             p_yes = float(row["price_yes"])
             p_no = float(row["price_no"])
             ts = row["timestamp"]
-            strategy.decide_and_execute(p_yes, p_no, ts)
-
+            if p_yes > p_no:
+                tendency += p_yes - p_no
+            else:
+                tendency -= p_yes - p_no
+            # Pasamos tick_index y total_ticks al strategy
+            strategy.decide_and_execute(p_yes, p_no, ts, tendency, tick_index=tick_index, total_ticks=total_ticks)
         # --------------------------------------------------------------
         # Cálculo de beneficio real del mercado
         # --------------------------------------------------------------
+        safe += strategy.safe
         last_row = df.iloc[-1]
         final_price_yes = float(last_row["price_yes"])
         final_price_no = float(last_row["price_no"])
-
         # Heurística simple: si YES está cerca de 1, asumimos que ganó YES, etc.
         if final_price_yes > 0.9 and final_price_yes >= final_price_no:
             winner = "YES"
@@ -137,7 +142,6 @@ def run_backtest(initial_capital: float = 1000.0) -> Tuple[pd.DataFrame, float]:
                 indent=2,
                 default=str,
             )
-
     # --------------------------------------------------------------
     # Resumen global
     # --------------------------------------------------------------
@@ -159,6 +163,7 @@ def run_backtest(initial_capital: float = 1000.0) -> Tuple[pd.DataFrame, float]:
     print(f"Mercados con profit >0: {(df_res['profit_final'] > 0).sum()}")
     print(f"Win Rin Rate: {(df_res['profit_final'] > 0).sum() / len(df_res) * 100:.1f}%")
     print(f"Trades promedio: {df_res['trades'].mean():.1f}")
+    print("Safe trades: ", safe)
     print("=" * 80)
 
     print("\nTOP 5 MERCADOS")
