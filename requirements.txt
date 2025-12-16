@@ -4,3 +4,8 @@ python-dateutil
 requests
 py-clob-client
 websocket-client
+web3
+eth-account
+python-dotenv
+websockets
+dotenv
